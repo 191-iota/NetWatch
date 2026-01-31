@@ -1,0 +1,43 @@
+## Roadmap
+
+### Phase 1: Foundation
+- [ ] Packet capture on specified interface
+- [ ] Parse Ethernet frames (extract MAC)
+- [ ] Parse IP headers (extract src/dst IP)
+- [ ] Track devices in memory (MAC → IP, packet count)
+- [ ] CLI output: live device table
+
+### Phase 2: Protocol Analysis
+- [ ] Parse DNS queries/responses
+- [ ] Extract TLS SNI (server names from HTTPS)
+- [ ] Track domains per device
+- [ ] Parse ARP for device discovery
+
+### Phase 3: Persistence
+- [ ] SQLite schema for devices, events, DNS logs
+- [ ] Write events to database
+- [ ] Query historical data
+
+### Phase 4: Threat Detection
+- [ ] Port scan detection
+- [ ] Known bad IP/domain blocklist
+- [ ] New device alerts
+- [ ] Anomaly detection (baseline → deviation)
+
+### Phase 5: Web Dashboard
+- [ ] REST API (axum)
+- [ ] Device list endpoint
+- [ ] Device detail endpoint
+- [ ] WebSocket for live updates
+
+### Phase 6: Visualization
+- [ ] Basic web UI
+- [ ] Device connection graph
+- [ ] Traffic over time charts
+- [ ] Alert feed
+
+### Phase 7: Deployment
+- [ ] Cross-compile for ARM
+- [ ] deploy.sh script
+- [ ] systemd service file
+- [ ] GitHub Actions CI/CD
