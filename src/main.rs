@@ -3,7 +3,11 @@ use std::io;
 use pnet::datalink::Channel;
 use pnet::datalink::Config;
 use pnet::datalink::interfaces;
+use pnet::packet::ethernet::EtherTypes;
 use pnet::packet::ethernet::EthernetPacket;
+use pnet::packet::ipv4::Ipv4Packet;
+
+use pnet::packet::Packet;
 
 fn main() -> Result<(), io::Error> {
     let interfaces = interfaces();
@@ -33,6 +37,17 @@ fn main() -> Result<(), io::Error> {
                         p.get_source(),
                         p.get_destination()
                     );
+
+                    if p.get_ethertype() == EtherTypes::Ipv4 {
+                        let payload = Ipv4Packet::new(p.payload());
+                        if let Some(ipv4) = payload {
+                            println!(
+                                "ipv4 source: {} -- ipv4 dest: {}",
+                                ipv4.get_source(),
+                                ipv4.get_destination()
+                            );
+                        }
+                    }
                 }
             }
             Err(e) => eprintln!("error: {}", e),
