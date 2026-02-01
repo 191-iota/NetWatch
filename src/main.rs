@@ -1,4 +1,7 @@
+use std::collections::HashMap;
 use std::io;
+use std::net::IpAddr;
+use std::time::Instant;
 
 use pnet::datalink::Channel;
 use pnet::datalink::Config;
@@ -8,6 +11,14 @@ use pnet::packet::ethernet::EthernetPacket;
 use pnet::packet::ipv4::Ipv4Packet;
 
 use pnet::packet::Packet;
+use pnet::util::MacAddr;
+
+struct Device {
+    mac: MacAddr,
+    ip: IpAddr,
+    packet_count: u64,
+    last_seen: Instant,
+}
 
 fn main() -> Result<(), io::Error> {
     let interfaces = interfaces();
@@ -24,6 +35,9 @@ fn main() -> Result<(), io::Error> {
         Channel::Ethernet(_, rx) => rx,
         _ => panic!("Not an ethernet channel"),
     };
+
+    let mut devices: HashMap<MacAddr, Device> = HashMap::new();
+    let mut count = 0;
 
     loop {
         match rx.next() {
@@ -47,6 +61,35 @@ fn main() -> Result<(), io::Error> {
                                 ipv4.get_destination()
                             );
                         }
+                    }
+
+                    if devices.contains_key(&p.get_source()) {
+                        let current_device = devices.get_mut(&p.get_source()).unwrap();
+                        current_device.packet_count += 1;
+                        current_device.last_seen = Instant::now();
+                    } else if p.get_ethertype() == EtherTypes::Ipv4 {
+                        let payload = Ipv4Packet::new(p.payload());
+                        if let Some(ipv4) = payload {
+                            devices.insert(
+                                p.get_source(),
+                                Device {
+                                    mac: p.get_source(),
+                                    ip: IpAddr::V4(ipv4.get_source()),
+                                    packet_count: 1,
+                                    last_seen: Instant::now(),
+                                },
+                            );
+                            println!(
+                                "ipv4 source: {} -- ipv4 dest: {}",
+                                ipv4.get_source(),
+                                ipv4.get_destination()
+                            );
+                        }
+                    }
+                    count += 1;
+                    if count > 50 {
+                        println!("Devices seen: {}", devices.len());
+                        count = 0;
                     }
                 }
             }
