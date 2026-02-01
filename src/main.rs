@@ -44,14 +44,7 @@ fn main() -> Result<(), io::Error> {
             Ok(packet) => {
                 let wrapped_packet = EthernetPacket::new(packet);
 
-                println!("got packet: {} bytes", packet.len());
                 if let Some(p) = wrapped_packet {
-                    println!(
-                        "packet source: {} -- packet dest: {}",
-                        p.get_source(),
-                        p.get_destination()
-                    );
-
                     if p.get_ethertype() == EtherTypes::Ipv4 {
                         let payload = Ipv4Packet::new(p.payload());
                         if let Some(ipv4) = payload {
