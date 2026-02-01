@@ -1,14 +1,14 @@
 ## Roadmap
 
 ### Phase 1: Foundation
-- [ ] Packet capture on specified interface
-- [ ] Parse Ethernet frames (extract MAC)
-- [ ] Parse IP headers (extract src/dst IP)
-- [ ] Track devices in memory (MAC → IP, packet count)
-- [ ] CLI output: live device table
+- [X] Packet capture on specified interface
+- [X] Parse Ethernet frames (extract MAC)
+- [X] Parse IP headers (extract src/dst IP)
+- [X] Track devices in memory (MAC → IP, packet count)
+- [X] CLI output: live device table
 
 ### Phase 2: Protocol Analysis
-- [ ] Parse DNS queries/responses
+- [X] Parse DNS queries/responses
 - [ ] Extract TLS SNI (server names from HTTPS)
 - [ ] Track domains per device
 - [ ] Parse ARP for device discovery
