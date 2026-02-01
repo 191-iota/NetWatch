@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io;
 use std::net::IpAddr;
 use std::time::Instant;
@@ -20,6 +21,7 @@ struct Device {
     ip: IpAddr,
     packet_count: u64,
     last_seen: Instant,
+    domains: HashSet<String>,
 }
 
 fn main() -> Result<(), io::Error> {
@@ -67,9 +69,10 @@ fn main() -> Result<(), io::Error> {
                                 ip: IpAddr::V4(ipv4.get_source()),
                                 packet_count: 1,
                                 last_seen: Instant::now(),
+                                domains: HashSet::new(),
                             });
 
-                        check_udp(ipv4);
+                        check_udp(ipv4, devices.get_mut(&p.get_source()));
                     }
 
                     count += 1;
@@ -84,7 +87,7 @@ fn main() -> Result<(), io::Error> {
     }
 }
 
-fn check_udp(ip_packet: Ipv4Packet) {
+fn check_udp(ip_packet: Ipv4Packet, device: Option<&mut Device>) {
     if ip_packet.get_next_level_protocol() != IpNextHeaderProtocols::Udp {
         return;
     }
@@ -97,13 +100,17 @@ fn check_udp(ip_packet: Ipv4Packet) {
         return;
     };
 
-    if udp.get_destination() == 53 {
+    if let Some(d) = device
+        && udp.get_destination() == 53
+    {
         for question in packet.questions {
+            let domain_string = question.qname.to_string();
             println!(
                 "DNS: {} looked up {}",
                 ip_packet.get_source(),
-                question.qname
+                domain_string
             );
+            d.domains.insert(domain_string);
         }
     }
 }
@@ -113,16 +120,20 @@ fn print_tracking_table(map: &HashMap<MacAddr, Device>) {
     println!("NetWatch - tracking wlan0");
     println!("──────────────────────────────────────────────────────────────────");
     println!(
-        "{:<20} {:<18} {:>10} {:>12}",
-        "MAC", "IP", "Packets", "Last Seen"
+        "{:<20} {:<18} {:>10} {:>8} {:>12}",
+        "MAC", "IP", "Packets", "Domains", "Last Seen"
     );
     println!("──────────────────────────────────────────────────────────────────");
     for (_, device) in map.iter() {
         let last_seen = device.last_seen.elapsed().as_secs();
         let last_seen_str = format!("{}s ago", last_seen);
         println!(
-            "{:<20} {:<18} {:>10} {:>12}",
-            device.mac, device.ip, device.packet_count, last_seen_str
+            "{:<20} {:<18} {:>10} {:>8} {:>12}",
+            device.mac,
+            device.ip,
+            device.packet_count,
+            device.domains.len(),
+            last_seen_str
         );
     }
 }
