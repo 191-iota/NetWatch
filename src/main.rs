@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::io;
 use std::net::IpAddr;
 use std::time::Instant;
-use std::usize;
 
 use pnet::datalink::Channel;
 use pnet::datalink::Config;
@@ -20,6 +19,7 @@ use pnet::util::MacAddr;
 
 struct Device {
     mac: MacAddr,
+    hostname: String,
     ip: IpAddr,
     packet_count: u64,
     last_seen: Instant,
@@ -33,6 +33,30 @@ struct Device {
 ///   Ethernet frame → filter own MAC → parse IPv4 → update device table
 ///   → check UDP (DNS on port 53) → check TCP (TLS SNI on port 443)
 fn main() -> Result<(), io::Error> {
+    // Read the DNS lease file
+    let contents = std::fs::read_to_string("/var/lib/misc/dnsmasq.leases").unwrap();
+    let mut devices: HashMap<IpAddr, Device> = HashMap::new();
+
+    for entry in contents.lines() {
+        let mut parts = entry.split_whitespace();
+        let _timestamp = parts.next().unwrap();
+        let mac: MacAddr = parts.next().unwrap().parse().unwrap();
+        let ip: IpAddr = parts.next().unwrap().parse().unwrap();
+        let hostname = parts.next().unwrap().to_string();
+
+        devices.insert(
+            ip,
+            Device {
+                mac,
+                hostname,
+                ip,
+                packet_count: 0,
+                last_seen: Instant::now(),
+                domains: HashSet::new(),
+            },
+        );
+    }
+
     let interfaces = interfaces();
 
     let default_interfaces = interfaces
@@ -48,7 +72,6 @@ fn main() -> Result<(), io::Error> {
         _ => panic!("Not an ethernet channel"),
     };
 
-    let mut devices: HashMap<MacAddr, Device> = HashMap::new();
     let mut count = 0;
     let my_mac = found_interface.mac.unwrap();
 
@@ -68,20 +91,22 @@ fn main() -> Result<(), io::Error> {
                         && p.get_ethertype() == EtherTypes::Ipv4
                     {
                         devices
-                            .entry(p.get_source())
+                            .entry(IpAddr::V4(ipv4.get_source()))
                             .and_modify(|d| {
                                 d.packet_count += 1;
                                 d.last_seen = Instant::now();
                             })
                             .or_insert(Device {
                                 mac: p.get_source(),
+                                hostname: String::from("Anonymous"),
                                 ip: IpAddr::V4(ipv4.get_source()),
                                 packet_count: 1,
                                 last_seen: Instant::now(),
                                 domains: HashSet::new(),
                             });
 
-                        check_udp(&ipv4, devices.get_mut(&p.get_source()));
+                        check_udp(&ipv4, devices.get_mut(&IpAddr::V4(ipv4.get_source())));
+                        check_tcp_packets(&ipv4, devices.get_mut(&IpAddr::V4(ipv4.get_source())));
                     }
 
                     count += 1;
@@ -130,9 +155,6 @@ fn check_tcp_packets(ip_packet: &Ipv4Packet, device: Option<&mut Device>) {
     // 0x16 => TLS Handshake
     if payload[0] == 0x16 {
         let mut pos: usize = 0;
-        let content_type = payload[pos];
-        let protocol_version = u16::from_be_bytes([payload[pos], payload[pos + 1]]);
-
         pos += 43;
 
         // Skip size byte and session_length
@@ -227,25 +249,30 @@ fn check_udp(ip_packet: &Ipv4Packet, device: Option<&mut Device>) {
     }
 }
 
-fn print_tracking_table(map: &HashMap<MacAddr, Device>) {
+fn print_tracking_table(map: &HashMap<IpAddr, Device>) {
     print!("\x1B[2J\x1B[1;1H");
-    println!("NetWatch - tracking wlan0");
+    println!("NetWatch - tracking eth0");
     println!("──────────────────────────────────────────────────────────────────");
     println!(
         "{:<20} {:<18} {:>10} {:>8} {:>12}",
         "MAC", "IP", "Packets", "Domains", "Last Seen"
     );
     println!("──────────────────────────────────────────────────────────────────");
-    for (_, device) in map.iter() {
+
+    for device in map.values() {
         let last_seen = device.last_seen.elapsed().as_secs();
-        let last_seen_str = format!("{}s ago", last_seen);
         println!(
-            "{:<20} {:<18} {:>10} {:>8} {:>12}",
+            "{:<20} {:<18} {:<18} {:>10} {:>8} {:>8}s ago",
             device.mac,
+            device.hostname,
             device.ip,
             device.packet_count,
             device.domains.len(),
-            last_seen_str
+            last_seen
         );
+        // Show all domains
+        for domain in device.domains.iter() {
+            println!("    └─ {}", domain);
+        }
     }
 }
