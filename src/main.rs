@@ -1,10 +1,19 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::env;
 use std::io;
 use std::net::IpAddr;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use actix_web::App;
+use actix_web::HttpServer;
+use actix_web::middleware::Logger;
+use actix_web::web;
+use dotenv::dotenv;
+use env_logger::Env;
 use pnet::datalink::Channel;
 use pnet::datalink::Config;
 use pnet::datalink::interfaces;
@@ -20,24 +29,69 @@ use pnet::util::MacAddr;
 use rusqlite::Connection;
 use rusqlite::params;
 
-struct Device {
-    mac: MacAddr,
-    hostname: String,
-    ip: IpAddr,
-    packet_count: u64,
-    last_seen: i64,
-    domains: HashSet<String>,
+use self::app_state::AppState;
+use self::app_state::Device;
+
+mod app_state;
+mod handlers;
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    dotenv().ok();
+    let address = setup_address();
+    log::info!("Running at http://{}:{}", address.0, address.1);
+
+    // init the logger and define default log level
+    env_logger::init_from_env(Env::default().default_filter_or("info"));
+    let app_state = web::Data::new(init_app_state().await);
+    let app_state = init_db(app_state);
+
+    let state_clone = app_state.clone();
+    std::thread::spawn(move || {
+        spawn_continuous_scan(state_clone).unwrap();
+    });
+
+    HttpServer::new(move || {
+        App::new()
+            .wrap(Logger::default())
+            .app_data(app_state.clone())
+            .configure(init_anon_scope)
+    })
+    .bind(format!("{}:{}", address.0, address.1))?
+    .run()
+    .await
+}
+fn init_anon_scope(cfg: &mut web::ServiceConfig) {
+    cfg.service(web::scope(""));
 }
 
-/// Captures raw Ethernet frames on the default network interface and maintains
-/// a live device tracking table.
-///
-/// Packet processing pipeline:
-///   Ethernet frame → filter own MAC → parse IPv4 → update device table
-///   → check UDP (DNS on port 53) → check TCP (TLS SNI on port 443)
-fn main() -> Result<(), io::Error> {
-    let mut conn = Connection::open("netwatch.db").expect("Failed initializing sqlite in");
+fn setup_address() -> (String, String) {
+    let host = env::var("HOST").unwrap_or_else(|_| {
+        log::warn!("Could not find HOST env, defaulting to 127.0.0.1");
+        "127.0.0.1".to_string()
+    });
 
+    let port = env::var("PORT").unwrap_or_else(|_| {
+        log::warn!("Could not find PORT env, defaulting to 8080");
+        "8080".to_string()
+    });
+
+    (host, port)
+}
+
+async fn init_app_state() -> AppState {
+    let conn = Connection::open("netwatch.db").expect("Failed initializing sqlite in");
+    let initial_state: Arc<Mutex<HashMap<IpAddr, app_state::Device>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    AppState {
+        devices: initial_state,
+        connection_pool: Arc::new(Mutex::new(conn)),
+    }
+}
+
+fn init_db(app_state: web::Data<AppState>) -> web::Data<AppState> {
+    let conn = app_state.connection_pool.lock().unwrap();
     conn.execute(
         "CREATE TABLE IF NOT EXISTS devices (
             ip TEXT PRIMARY KEY,
@@ -63,7 +117,6 @@ fn main() -> Result<(), io::Error> {
 
     // Read the DNS lease file
     let contents = std::fs::read_to_string("/var/lib/misc/dnsmasq.leases").unwrap();
-    let mut devices: HashMap<IpAddr, Device> = HashMap::new();
 
     for entry in contents.lines() {
         let mut parts = entry.split_whitespace();
@@ -72,9 +125,11 @@ fn main() -> Result<(), io::Error> {
         let ip: IpAddr = parts.next().unwrap().parse().unwrap();
         let hostname = parts.next().unwrap().to_string();
 
+        let mut devices = app_state.devices.lock().unwrap();
+
         devices.insert(
             ip,
-            Device {
+            app_state::Device {
                 mac,
                 hostname,
                 ip,
@@ -88,6 +143,10 @@ fn main() -> Result<(), io::Error> {
         );
     }
 
+    app_state.clone()
+}
+
+fn spawn_continuous_scan(app_state: web::Data<AppState>) -> Result<(), io::Error> {
     let interfaces = interfaces();
 
     let default_interfaces = interfaces
@@ -112,6 +171,7 @@ fn main() -> Result<(), io::Error> {
                 let wrapped_packet = EthernetPacket::new(packet);
 
                 if let Some(p) = wrapped_packet {
+                    let mut devices = app_state.devices.lock().unwrap();
                     if p.get_source() == my_mac {
                         continue;
                     }
@@ -148,7 +208,7 @@ fn main() -> Result<(), io::Error> {
 
                     count += 1;
                     if count > 50 {
-                        print_tracking_table(&devices);
+                        let mut conn = app_state.connection_pool.lock().unwrap();
                         batch_upsert_entries(&mut conn, &devices)
                             .expect("Failed storing to the db");
                         count = 0;
@@ -316,39 +376,6 @@ fn check_udp(ip_packet: &Ipv4Packet, device: Option<&mut Device>) {
         for question in packet.questions {
             let domain_string = question.qname.to_string();
             d.domains.insert(domain_string);
-        }
-    }
-}
-
-fn print_tracking_table(map: &HashMap<IpAddr, Device>) {
-    print!("\x1B[2J\x1B[1;1H");
-    println!("NetWatch - tracking eth0");
-    println!("──────────────────────────────────────────────────────────────────");
-    println!(
-        "{:<20} {:<18} {:>10} {:>8} {:>12}",
-        "MAC", "IP", "Packets", "Domains", "Last Seen"
-    );
-    println!("──────────────────────────────────────────────────────────────────");
-
-    for device in map.values() {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-        let seconds_ago = now - device.last_seen;
-
-        println!(
-            "{:<20} {:<18} {:<18} {:>10} {:>8} {:>8}s ago",
-            device.mac,
-            device.hostname,
-            device.ip,
-            device.packet_count,
-            device.domains.len(),
-            seconds_ago
-        );
-        // Show all domains
-        for domain in device.domains.iter() {
-            println!("    └─ {}", domain);
         }
     }
 }
