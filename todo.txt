@@ -14,8 +14,8 @@
 - [ ] Parse ARP for device discovery
 
 ### Phase 3: Persistence
-- [ ] SQLite schema for devices, events, DNS logs
-- [ ] Write events to database
+- [X] SQLite schema for devices, events, DNS logs
+- [X] Write events to database
 - [ ] Query historical data
 
 ### Phase 4: Threat Detection

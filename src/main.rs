@@ -39,22 +39,23 @@ fn main() -> Result<(), io::Error> {
     let mut conn = Connection::open("netwatch.db").expect("Failed initializing sqlite in");
 
     conn.execute(
-        "CREATE TABLE devices (
+        "CREATE TABLE IF NOT EXISTS devices (
             ip TEXT PRIMARY KEY,
             mac TEXT NOT NULL,
             hostname TEXT NOT NULL,
-            first_seen TIMESTAMP NOT NULL,
-            last_seen TIMESTAMP NOT NULL,
+            first_seen INTEGER NOT NULL,
+            last_seen INTEGER NOT NULL,
             packet_count INTEGER NOT NULL",
         (),
     )
     .expect("Failed creating table devices");
 
     conn.execute(
-        "CREATE TABLE dns_logs(
-            ip TEXT PRIMARY KEY,
+        "CREATE TABLE IF NOT EXISTS dns_logs (
+            ip TEXT NOT NULL,
             domain TEXT NOT NULL,
-            timestamp TIMESTAMP NOT NULL",
+            timestamp INTEGER NOT NULL
+        )",
         (),
     )
     .expect("Failed creating table dns_logs");
@@ -178,6 +179,19 @@ fn batch_upsert_entries(
                 device.last_seen
             ],
         )?;
+
+        for domain in device.domains.iter() {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+
+            tx.execute(
+                "INSERT INTO dns_logs (ip, domain, timestamp)
+                VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![device.ip.to_string(), domain, now],
+            )?;
+        }
     }
 
     tx.commit()?;
