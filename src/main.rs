@@ -45,7 +45,8 @@ fn main() -> Result<(), io::Error> {
             hostname TEXT NOT NULL,
             first_seen INTEGER NOT NULL,
             last_seen INTEGER NOT NULL,
-            packet_count INTEGER NOT NULL",
+            packet_count INTEGER NOT NULL
+            )",
         (),
     )
     .expect("Failed creating table devices");
@@ -166,8 +167,8 @@ fn batch_upsert_entries(
     let tx = conn.transaction()?;
     for device in devices.values() {
         tx.execute(
-            "INSERT INTO devices (ip, mac, hostname, packet_count, last_seen)
-            VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO devices (ip, mac, hostname, packet_count, first_seen, last_seen)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?5)
             ON CONFLICT(ip) DO UPDATE SET
             packet_count = ?4,
             last_seen = ?5",
@@ -188,7 +189,7 @@ fn batch_upsert_entries(
 
             tx.execute(
                 "INSERT INTO dns_logs (ip, domain, timestamp)
-                VALUES (?1, ?2, ?3, ?4, ?5)",
+                VALUES (?1, ?2, ?3)",
                 params![device.ip.to_string(), domain, now],
             )?;
         }
