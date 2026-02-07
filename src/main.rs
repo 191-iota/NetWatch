@@ -3,6 +3,8 @@ use std::collections::HashSet;
 use std::io;
 use std::net::IpAddr;
 use std::time::Instant;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use pnet::datalink::Channel;
 use pnet::datalink::Config;
@@ -16,13 +18,15 @@ use pnet::packet::Packet;
 use pnet::packet::tcp::TcpPacket;
 use pnet::packet::udp::UdpPacket;
 use pnet::util::MacAddr;
+use rusqlite::Connection;
+use rusqlite::params;
 
 struct Device {
     mac: MacAddr,
     hostname: String,
     ip: IpAddr,
     packet_count: u64,
-    last_seen: Instant,
+    last_seen: i64,
     domains: HashSet<String>,
 }
 
@@ -33,6 +37,29 @@ struct Device {
 ///   Ethernet frame → filter own MAC → parse IPv4 → update device table
 ///   → check UDP (DNS on port 53) → check TCP (TLS SNI on port 443)
 fn main() -> Result<(), io::Error> {
+    let mut conn = Connection::open("netwatch.db").expect("Failed initializing sqlite in");
+
+    conn.execute(
+        "CREATE TABLE devices (
+            ip TEXT PRIMARY KEY,
+            mac TEXT NOT NULL,
+            hostname TEXT NOT NULL,
+            first_seen TIMESTAMP NOT NULL,
+            last_seen TIMESTAMP NOT NULL,
+            packet_count INTEGER NOT NULL",
+        (),
+    )
+    .expect("Failed creating table devices");
+
+    conn.execute(
+        "CREATE TABLE dns_logs(
+            ip TEXT PRIMARY KEY,
+            domain TEXT NOT NULL,
+            timestamp TIMESTAMP NOT NULL",
+        (),
+    )
+    .expect("Failed creating table dns_logs");
+
     // Read the DNS lease file
     let contents = std::fs::read_to_string("/var/lib/misc/dnsmasq.leases").unwrap();
     let mut devices: HashMap<IpAddr, Device> = HashMap::new();
@@ -51,7 +78,10 @@ fn main() -> Result<(), io::Error> {
                 hostname,
                 ip,
                 packet_count: 0,
-                last_seen: Instant::now(),
+                last_seen: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64,
                 domains: HashSet::new(),
             },
         );
@@ -94,14 +124,20 @@ fn main() -> Result<(), io::Error> {
                             .entry(IpAddr::V4(ipv4.get_source()))
                             .and_modify(|d| {
                                 d.packet_count += 1;
-                                d.last_seen = Instant::now();
+                                d.last_seen = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs() as i64;
                             })
                             .or_insert(Device {
                                 mac: p.get_source(),
                                 hostname: String::from("Anonymous"),
                                 ip: IpAddr::V4(ipv4.get_source()),
                                 packet_count: 1,
-                                last_seen: Instant::now(),
+                                last_seen: SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs() as i64,
                                 domains: HashSet::new(),
                             });
 
@@ -112,6 +148,8 @@ fn main() -> Result<(), io::Error> {
                     count += 1;
                     if count > 50 {
                         print_tracking_table(&devices);
+                        batch_upsert_entries(&mut conn, &devices)
+                            .expect("Failed storing to the db");
                         count = 0;
                     }
                 }
@@ -119,6 +157,32 @@ fn main() -> Result<(), io::Error> {
             Err(e) => eprintln!("error: {}", e),
         }
     }
+}
+
+fn batch_upsert_entries(
+    conn: &mut Connection,
+    devices: &HashMap<IpAddr, Device>,
+) -> rusqlite::Result<()> {
+    let tx = conn.transaction()?;
+    for device in devices.values() {
+        tx.execute(
+            "INSERT INTO devices (ip, mac, hostname, packet_count, last_seen)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(ip) DO UPDATE SET
+            packet_count = ?4,
+            last_seen = ?5",
+            params![
+                device.ip.to_string(),
+                device.mac.to_string(),
+                device.hostname,
+                device.packet_count as i64,
+                device.last_seen
+            ],
+        )?;
+    }
+
+    tx.commit()?;
+    Ok(())
 }
 
 /// Parses a TLS ClientHello to extract the SNI (Server Name Indication) hostname.
@@ -253,7 +317,12 @@ fn print_tracking_table(map: &HashMap<IpAddr, Device>) {
     println!("──────────────────────────────────────────────────────────────────");
 
     for device in map.values() {
-        let last_seen = device.last_seen.elapsed().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let seconds_ago = now - device.last_seen;
+
         println!(
             "{:<20} {:<18} {:<18} {:>10} {:>8} {:>8}s ago",
             device.mac,
@@ -261,7 +330,7 @@ fn print_tracking_table(map: &HashMap<IpAddr, Device>) {
             device.ip,
             device.packet_count,
             device.domains.len(),
-            last_seen
+            seconds_ago
         );
         // Show all domains
         for domain in device.domains.iter() {
