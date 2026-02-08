@@ -12,12 +12,14 @@ use pnet::util::MacAddr;
 pub struct AppState {
     pub devices: Arc<Mutex<HashMap<IpAddr, Device>>>,
     pub connection_pool: Arc<Mutex<Connection>>,
+    pub vendor_map: Arc<HashMap<String, String>>,
     pub alert_tx: tokio::sync::broadcast::Sender<Alert>,
 }
 
 #[derive(Clone)]
 pub struct Device {
     pub mac: MacAddr,
+    pub vendor: String,
     pub hostname: String,
     pub ip: IpAddr,
     pub packet_count: u64,
@@ -28,6 +30,7 @@ pub struct Device {
 #[derive(Serialize, Clone)]
 pub struct DeviceResponse {
     pub mac: String,
+    pub vendor: String,
     pub hostname: String,
     pub ip: String,
     pub packet_count: i64,

@@ -54,7 +54,7 @@ async fn main() -> std::io::Result<()> {
 
     // init the logger and define default log level
     env_logger::init_from_env(Env::default().default_filter_or("info"));
-    let app_state = web::Data::new(init_app_state().await);
+    let app_state = web::Data::new(init_app_state());
     let app_state = init_db(app_state);
 
     let state_clone = app_state.clone();
@@ -98,15 +98,17 @@ fn setup_address() -> (String, String) {
     (host, port)
 }
 
-async fn init_app_state() -> AppState {
-    let conn = Connection::open("netwatch.db").expect("Failed initializing sqlite in");
+fn init_app_state() -> AppState {
+    let conn = Connection::open_in_memory().expect("Failed initializing sqlite in");
     let initial_state: Arc<Mutex<HashMap<IpAddr, models::Device>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
+    let vendor_map: HashMap<String, String> = get_vendor_map();
     let (tx, _) = tokio::sync::broadcast::channel::<Alert>(100);
 
     AppState {
         devices: initial_state,
+        vendor_map: Arc::new(vendor_map),
         connection_pool: Arc::new(Mutex::new(conn)),
         alert_tx: tx,
     }
@@ -118,6 +120,7 @@ fn init_db(app_state: web::Data<AppState>) -> web::Data<AppState> {
         "CREATE TABLE IF NOT EXISTS devices (
             ip TEXT PRIMARY KEY,
             mac TEXT NOT NULL,
+            vendor TEXT NOT NULL,
             hostname TEXT NOT NULL,
             first_seen INTEGER NOT NULL,
             last_seen INTEGER NOT NULL,
@@ -158,12 +161,20 @@ fn init_db(app_state: web::Data<AppState>) -> web::Data<AppState> {
         let hostname = parts.next().unwrap().to_string();
 
         let mut devices = app_state.devices.lock().unwrap();
+        let mac_str = mac.to_string().to_uppercase();
+        let prefix = &mac_str[..8];
+        let vendor = app_state
+            .vendor_map
+            .get(prefix)
+            .cloned()
+            .unwrap_or_else(|| "Unknown".to_string());
 
         devices.insert(
             ip,
             models::Device {
                 mac,
                 hostname,
+                vendor,
                 ip,
                 packet_count: 0,
                 last_seen: SystemTime::now()
@@ -220,7 +231,6 @@ fn spawn_continuous_scan(app_state: web::Data<AppState>) -> Result<(), io::Error
     }
 
     let mut device_port: HashMap<IpAddr, Vec<(u16, i64)>> = HashMap::new();
-
     loop {
         match rx.next() {
             Ok(packet) => {
@@ -276,6 +286,13 @@ fn spawn_continuous_scan(app_state: web::Data<AppState>) -> Result<(), io::Error
                             }
                         }
 
+                        let mac_str = p.get_source().to_string().to_uppercase();
+                        let prefix = &mac_str[..8];
+                        let vendor = app_state
+                            .vendor_map
+                            .get(prefix)
+                            .cloned()
+                            .unwrap_or_else(|| "Unknown".to_string());
                         devices
                             .entry(IpAddr::V4(ipv4.get_source()))
                             .and_modify(|d| {
@@ -287,6 +304,7 @@ fn spawn_continuous_scan(app_state: web::Data<AppState>) -> Result<(), io::Error
                             })
                             .or_insert(Device {
                                 mac: p.get_source(),
+                                vendor,
                                 hostname: String::from("Anonymous"),
                                 ip: IpAddr::V4(ipv4.get_source()),
                                 packet_count: 1,
@@ -350,6 +368,21 @@ fn spawn_continuous_scan(app_state: web::Data<AppState>) -> Result<(), io::Error
             Err(e) => eprintln!("error: {}", e),
         }
     }
+}
+
+fn get_vendor_map() -> HashMap<String, String> {
+    let oui_txt = include_str!("../assets/vendor.txt");
+    let mut oui_map: HashMap<String, String> = HashMap::new();
+
+    for line in oui_txt.lines() {
+        if line.contains("(hex)") {
+            let parts: Vec<&str> = line.split("(hex)").collect();
+            let prefix = parts[0].trim().replace('-', ":").to_uppercase();
+            let vendor = parts[1].trim().to_string();
+            oui_map.insert(prefix, vendor);
+        }
+    }
+    oui_map
 }
 
 /// Parses a TLS ClientHello to extract the SNI (Server Name Indication) hostname.
@@ -498,8 +531,8 @@ fn batch_upsert_entries(
     let tx = conn.transaction()?;
     for device in devices.values() {
         tx.execute(
-            "INSERT INTO devices (ip, mac, hostname, packet_count, first_seen, last_seen)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            "INSERT INTO devices (ip, mac, hostname, packet_count, first_seen, last_seen, vendor)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
             ON CONFLICT(ip) DO UPDATE SET
             packet_count = ?4,
             last_seen = ?5",
@@ -508,7 +541,8 @@ fn batch_upsert_entries(
                 device.mac.to_string(),
                 device.hostname,
                 device.packet_count as i64,
-                device.last_seen
+                device.last_seen,
+                device.vendor
             ],
         )?;
 
@@ -534,8 +568,9 @@ fn batch_upsert_entries(
 /// within a single transaction for SD card efficiency.
 pub fn get_db_devices(conn: &mut Connection) -> rusqlite::Result<Vec<DeviceResponse>> {
     let mut devices = Vec::new();
-    let mut stmt =
-        conn.prepare("SELECT ip, mac, hostname, packet_count, first_seen, last_seen FROM devices")?;
+    let mut stmt = conn.prepare(
+        "SELECT ip, mac, hostname, packet_count, first_seen, last_seen, vendor FROM devices",
+    )?;
     let rows = stmt.query_map([], |row| {
         Ok(DeviceResponse {
             ip: row.get(0)?,
@@ -544,6 +579,7 @@ pub fn get_db_devices(conn: &mut Connection) -> rusqlite::Result<Vec<DeviceRespo
             packet_count: row.get(3)?,
             first_seen: row.get(4)?,
             last_seen: row.get(5)?,
+            vendor: row.get(6)?,
             domains: vec![],
         })
     })?;
@@ -568,7 +604,7 @@ pub fn get_db_device_by_ip(
 ) -> rusqlite::Result<Option<DeviceResponse>> {
     // TODO: Implement
     let mut stmt = conn.prepare(
-        "SELECT DISTINCT ip, mac, hostname, packet_count, first_seen, last_seen FROM devices WHERE ip = ?1",
+        "SELECT DISTINCT ip, mac, hostname, packet_count, first_seen, last_seen, vendor FROM devices WHERE ip = ?1",
     )?;
 
     let mut rows = stmt.query_map([&ip], |row| {
@@ -579,6 +615,7 @@ pub fn get_db_device_by_ip(
             packet_count: row.get(3)?,
             first_seen: row.get(4)?,
             last_seen: row.get(5)?,
+            vendor: row.get(6)?,
             domains: vec![],
         })
     })?;
