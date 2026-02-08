@@ -25,9 +25,9 @@
 - [ ] Anomaly detection (baseline → deviation)
 
 ### Phase 5: Web Dashboard
-- [ ] REST API (actix)
-- [ ] Device list endpoint
-- [ ] Device detail endpoint
+- [X] REST API (actix)
+- [X] Device list endpoint
+- [X] Device detail endpoint
 - [ ] WebSocket for live updates
 
 ### Phase 6: Visualization
@@ -38,6 +38,6 @@
 
 ### Phase 7: Deployment
 - [ ] Cross-compile for ARM
-- [ ] deploy.sh script
+- [X] deploy.sh script
 - [ ] systemd service file
 - [ ] GitHub Actions CI/CD

@@ -12,6 +12,7 @@ use pnet::util::MacAddr;
 pub struct AppState {
     pub devices: Arc<Mutex<HashMap<IpAddr, Device>>>,
     pub connection_pool: Arc<Mutex<Connection>>,
+    pub alert_tx: tokio::sync::broadcast::Sender<Alert>,
 }
 
 #[derive(Clone)]
@@ -24,7 +25,7 @@ pub struct Device {
     pub domains: HashSet<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct DeviceResponse {
     pub mac: String,
     pub hostname: String,
@@ -33,4 +34,28 @@ pub struct DeviceResponse {
     pub first_seen: i64,
     pub last_seen: i64,
     pub domains: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct Alert {
+    pub ip: String,
+    pub reason: String,
+    pub timestamp: i64,
+}
+
+#[derive(Clone, Serialize)]
+pub enum AlertReason {
+    NewDevice,
+    BlockedDomain(String),
+    SuspiciousCommunication(String),
+}
+
+impl std::fmt::Display for AlertReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AlertReason::NewDevice => write!(f, "New device"),
+            AlertReason::BlockedDomain(d) => write!(f, "Blocked domain: {}", d),
+            AlertReason::SuspiciousCommunication(s) => write!(f, "Suspicious {}", s),
+        }
+    }
 }
