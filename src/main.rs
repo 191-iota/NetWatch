@@ -234,6 +234,14 @@ fn spawn_continuous_scan(app_state: web::Data<AppState>) -> Result<(), io::Error
         }
     }
 
+    let beacon_state = app_state.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            run_beaconing_analysis(&beacon_state);
+        }
+    });
+
     let mut device_port: HashMap<IpAddr, Vec<(u16, i64)>> = HashMap::new();
     loop {
         match rx.next() {
@@ -386,13 +394,6 @@ fn spawn_continuous_scan(app_state: web::Data<AppState>) -> Result<(), io::Error
 
             Err(e) => eprintln!("error: {}", e),
         }
-        let beacon_state = app_state.clone();
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(60));
-                run_beaconing_analysis(&beacon_state);
-            }
-        });
     }
 }
 
