@@ -22,13 +22,13 @@
 - [X] Port scan detection
 - [X] Known bad IP/domain blocklist
 - [X] New device alerts
-- [ ] Anomaly detection (baseline → deviation)
+- [half] Anomaly detection (baseline → deviation)
 
 ### Phase 5: Web Dashboard
 - [X] REST API (actix)
 - [X] Device list endpoint
 - [X] Device detail endpoint
-- [ ] WebSocket for live updates
+- [X] WebSocket for live updates
 
 ### Phase 6: Visualization
 - [ ] Basic web UI
@@ -39,5 +39,5 @@
 ### Phase 7: Deployment
 - [ ] Cross-compile for ARM
 - [X] deploy.sh script
-- [ ] systemd service file
+- [X] systemd service file
 - [ ] GitHub Actions CI/CD

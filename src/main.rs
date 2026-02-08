@@ -1,7 +1,9 @@
+// TODO: Modularize code + better performance + less redundancy
+// I wrote this in one session it is nowhere near production ready!
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
-use std::hash::Hash;
 use std::io;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -29,7 +31,6 @@ use pnet::packet::udp::UdpPacket;
 use pnet::util::MacAddr;
 use rusqlite::Connection;
 use rusqlite::params;
-use tokio::time::interval;
 
 use self::handlers::get_alerts;
 use self::handlers::get_device_by_ip;
