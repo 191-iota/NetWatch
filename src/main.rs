@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
+use std::hash::Hash;
 use std::io;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -28,6 +29,7 @@ use pnet::packet::udp::UdpPacket;
 use pnet::util::MacAddr;
 use rusqlite::Connection;
 use rusqlite::params;
+use tokio::time::interval;
 
 use self::handlers::get_alerts;
 use self::handlers::get_device_by_ip;
@@ -111,6 +113,7 @@ fn init_app_state() -> AppState {
         vendor_map: Arc::new(vendor_map),
         connection_pool: Arc::new(Mutex::new(conn)),
         alert_tx: tx,
+        src_dst: Arc::new(Mutex::new(HashMap::new())),
     }
 }
 
@@ -247,7 +250,21 @@ fn spawn_continuous_scan(app_state: web::Data<AppState>) -> Result<(), io::Error
                     if let Some(ipv4) = Ipv4Packet::new(payload)
                         && p.get_ethertype() == EtherTypes::Ipv4
                     {
+                        let mut src_dst = app_state.src_dst.lock().unwrap();
                         let src_ip = IpAddr::V4(ipv4.get_source());
+                        let dest_ip = IpAddr::V4(ipv4.get_destination());
+
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs() as i64;
+                        src_dst
+                            .entry((src_ip, dest_ip))
+                            .and_modify(|e| {
+                                e.push((now, p.payload().len()));
+                            })
+                            .or_insert(vec![(now, p.payload().len())]);
+
                         let dst_port = match ipv4.get_next_level_protocol() {
                             IpNextHeaderProtocols::Tcp => {
                                 TcpPacket::new(ipv4.payload()).map(|t| t.get_destination())
@@ -365,8 +382,16 @@ fn spawn_continuous_scan(app_state: web::Data<AppState>) -> Result<(), io::Error
                     }
                 }
             }
+
             Err(e) => eprintln!("error: {}", e),
         }
+        let beacon_state = app_state.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                run_beaconing_analysis(&beacon_state);
+            }
+        });
     }
 }
 
@@ -672,4 +697,60 @@ pub fn get_db_alerts(conn: &mut Connection) -> rusqlite::Result<Vec<Alert>> {
         })
     })?;
     rows.collect()
+}
+
+fn run_beaconing_analysis(state: &web::Data<AppState>) {
+    let port_data = state.src_dst.lock().unwrap();
+
+    for ((src, dst), samples) in port_data.iter() {
+        if samples.len() < 10 {
+            continue;
+        }
+        if dst.to_string().ends_with(".255") {
+            continue;
+        }
+
+        if src.to_string().ends_with(".255") {
+            continue;
+        }
+
+        if src.to_string() == env::var("PI_HOST").unwrap()
+            || dst.to_string() == env::var("PI_HOST").unwrap()
+        {
+            continue;
+        }
+
+        if !src.to_string().starts_with("192.168.1") {
+            continue;
+        }
+
+        // Compute intervals between timestamps
+        let intervals: Vec<f64> = samples
+            .windows(2)
+            .map(|w| (w[1].0 - w[0].0) as f64)
+            .collect();
+
+        let avg = intervals.iter().sum::<f64>() / intervals.len() as f64;
+        if avg == 0.0 {
+            continue;
+        }
+
+        let variance =
+            intervals.iter().map(|i| (i - avg).powi(2)).sum::<f64>() / intervals.len() as f64;
+
+        let std_deviation = variance.sqrt();
+        let cv = std_deviation / avg;
+
+        if cv < 0.2 {
+            let mut conn = state.connection_pool.lock().unwrap();
+            // BEACON HIGHLY PROBABLE
+            save_device_alert(
+                &mut conn,
+                src.to_string(),
+                AlertReason::Beacon(format!("{} every ~{:.0}s", dst, avg)),
+                state.alert_tx.clone(),
+            )
+            .unwrap();
+        }
+    }
 }

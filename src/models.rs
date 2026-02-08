@@ -14,6 +14,7 @@ pub struct AppState {
     pub connection_pool: Arc<Mutex<Connection>>,
     pub vendor_map: Arc<HashMap<String, String>>,
     pub alert_tx: tokio::sync::broadcast::Sender<Alert>,
+    pub src_dst: Arc<Mutex<HashMap<(IpAddr, IpAddr), Vec<(i64, usize)>>>>,
 }
 
 #[derive(Clone)]
@@ -51,6 +52,7 @@ pub enum AlertReason {
     NewDevice,
     BlockedDomain(String),
     SuspiciousCommunication(String),
+    Beacon(String),
 }
 
 impl std::fmt::Display for AlertReason {
@@ -59,6 +61,7 @@ impl std::fmt::Display for AlertReason {
             AlertReason::NewDevice => write!(f, "New device"),
             AlertReason::BlockedDomain(d) => write!(f, "Blocked domain: {}", d),
             AlertReason::SuspiciousCommunication(s) => write!(f, "Suspicious {}", s),
+            AlertReason::Beacon(s) => write!(f, "Beaconing: {}", s),
         }
     }
 }
