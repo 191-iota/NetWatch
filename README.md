@@ -1,4 +1,4 @@
-# NetWatch
+# netwatch
 
 Network security monitor for Raspberry Pi. Captures raw packets, identifies devices, logs DNS/TLS traffic, detects threats in real-time.
 
