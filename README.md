@@ -6,7 +6,8 @@ Built from scratch in Rust including a hand-written TLS ClientHello parser for S
 
 ## Architecture
 
-![System Architecture](assets/architecture.svg)
+![System Architecture](assets/architecture.png)
+
 ## Features
 
 - Raw packet capture via pnet (Ethernet → IPv4 → TCP/UDP)
