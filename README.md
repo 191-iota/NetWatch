@@ -1,7 +1,5 @@
 # netwatch
 
-NOTE: THIS IS A WEEKEND LEARNING PROJECT
-
 Network security monitor for Raspberry Pi. Captures raw packets, identifies devices, logs DNS/TLS traffic, detects threats in real-time.
 
 Built from scratch in Rust including a hand-written TLS ClientHello parser for SNI extraction.
